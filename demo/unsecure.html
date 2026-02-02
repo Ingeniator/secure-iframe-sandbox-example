@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Unsecure iframe — без изоляции</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; padding: 24px; background: #f5f5f5; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .warning { color: #b00; font-size: 13px; margin-bottom: 20px; }
+    .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    label.upload {
+      display: inline-block; padding: 8px 16px; background: #333; color: #fff;
+      border-radius: 6px; cursor: pointer; font-size: 14px;
+    }
+    label.upload:hover { background: #555; }
+    input[type="file"] { display: none; }
+    .filename { font-size: 13px; color: #666; }
+    button {
+      padding: 8px 20px; font-size: 14px; border: none; border-radius: 6px;
+      background: #d32f2f; color: #fff; cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button:hover:not(:disabled) { background: #b71c1c; }
+    iframe {
+      width: 100%; height: calc(100vh - 160px); border: 2px solid #d32f2f;
+      border-radius: 8px; background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Unsecure iframe</h1>
+  <p class="warning">Без sandbox, без CSP, без Permissions Policy — полный доступ к родительской странице</p>
+
+  <div class="controls">
+    <label class="upload">
+      Выбрать HTML-файл
+      <input type="file" id="file" accept=".html,.htm">
+    </label>
+    <span class="filename" id="filename">файл не выбран</span>
+    <button id="run" disabled>Загрузить в iframe</button>
+  </div>
+
+  <iframe id="frame"></iframe>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const filenameLabel = document.getElementById('filename');
+    const runBtn = document.getElementById('run');
+    const frame = document.getElementById('frame');
+
+    let fileContent = null;
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      filenameLabel.textContent = file.name;
+      const reader = new FileReader();
+      reader.onload = () => {
+        fileContent = reader.result;
+        runBtn.disabled = false;
+      };
+      reader.readAsText(file);
+    });
+
+    runBtn.addEventListener('click', () => {
+      if (!fileContent) return;
+      // Write directly into iframe's document so it shares parent's origin.
+      // srcdoc would create an opaque origin, masking real vulnerabilities.
+      const doc = frame.contentDocument;
+      doc.open();
+      doc.write(fileContent);
+      doc.close();
+    });
+  </script>
+</body>
+</html>

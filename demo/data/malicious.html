@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: monospace; padding: 16px; background: #1a1a2e; color: #0f0; }
+    h2 { color: #f00; margin-bottom: 4px; }
+    .counter { color: #888; margin-bottom: 12px; font-size: 13px; }
+    .result { margin: 4px 0; }
+    .ok { color: #0f0; }
+    .fail { color: #f55; }
+    .summary { margin-top: 16px; padding: 8px; border-top: 1px solid #444; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h2>Атаки на iframe-песочницу</h2>
+  <div class="counter" id="counter"></div>
+  <div id="log"></div>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const counterEl = document.getElementById('counter');
+    const TOTAL = 20;
+    let completed = 0;
+    let vulnCount = 0;
+    let blockedCount = 0;
+
+    function updateCounter() {
+      counterEl.textContent = `Выполнено: ${completed}/${TOTAL}`;
+      if (completed === TOTAL) {
+        const div = document.createElement('div');
+        div.className = 'summary';
+        div.innerHTML =
+          `<span style="color:#f55">${vulnCount} уязвимостей</span> · ` +
+          `<span style="color:#0f0">${blockedCount} заблокировано</span> из ${TOTAL}`;
+        logEl.appendChild(div);
+      }
+    }
+
+    function report(num, name, success, detail) {
+      completed++;
+      if (success) vulnCount++; else blockedCount++;
+      const div = document.createElement('div');
+      div.className = 'result ' + (success ? 'fail' : 'ok');
+      div.textContent =
+        `${num}/${TOTAL} ` +
+        (success ? '[УЯЗВИМОСТЬ] ' : '[ЗАБЛОКИРОВАНО] ') +
+        name + (detail ? ' — ' + detail : '');
+      logEl.appendChild(div);
+      updateCounter();
+    }
+
+    // ─── 1/20 XSS: чтение DOM родителя ───
+    try {
+      const title = window.parent.document.title;
+      report(1, 'XSS: чтение DOM родителя', true, 'title = ' + title);
+    } catch (e) {
+      report(1, 'XSS: чтение DOM родителя', false, e.message);
+    }
+
+    // ─── 2/20 Кража данных: cookies ───
+    try {
+      document.cookie = 'test_hack=1';
+      const c = document.cookie;
+      if (c.includes('test_hack')) {
+        report(2, 'Кража данных: cookies', true, 'запись и чтение cookie успешны');
+      } else {
+        report(2, 'Кража данных: cookies', false, 'cookie недоступны (opaque origin)');
+      }
+    } catch (e) {
+      report(2, 'Кража данных: cookies', false, e.message);
+    }
+
+    // ─── 3/20 Кража данных: localStorage ───
+    try {
+      localStorage.setItem('hack', '1');
+      report(3, 'Кража данных: localStorage', true, 'запись успешна');
+    } catch (e) {
+      report(3, 'Кража данных: localStorage', false, e.message);
+    }
+
+    // ─── 4/20 Кража данных: sessionStorage ───
+    try {
+      sessionStorage.setItem('hack', '1');
+      report(4, 'Кража данных: sessionStorage', true, 'запись успешна');
+    } catch (e) {
+      report(4, 'Кража данных: sessionStorage', false, e.message);
+    }
+
+    // ─── 5/20 Перенаправление: top.location ───
+    try {
+      const href = top.location.href;
+      report(5, 'Перенаправление: top.location', true, href);
+    } catch (e) {
+      report(5, 'Перенаправление: top.location', false, e.message);
+    }
+
+    // ─── 6/20 Фишинг: popup (window.open) ───
+    try {
+      // Don't actually open a tab — just check if window.open returns a handle
+      const w = window.open('', '_blank', 'width=1,height=1');
+      if (w) {
+        w.close();
+        report(6, 'Фишинг: popup (window.open)', true, 'popup доступен');
+      } else {
+        report(6, 'Фишинг: popup (window.open)', false, 'вернул null');
+      }
+    } catch (e) {
+      report(6, 'Фишинг: popup (window.open)', false, e.message);
+    }
+
+    // ─── 7/20 Фишинг: модальные диалоги (alert) ───
+    try {
+      const isNative = Function.prototype.toString.call(alert).includes('[native code]');
+      if (isNative) {
+        // Don't actually show the modal — just confirm it's available
+        report(7, 'Фишинг: модальные диалоги (alert)', true, 'alert() доступен (native)');
+      } else {
+        report(7, 'Фишинг: модальные диалоги (alert)', false, 'переопределён (defense-in-depth)');
+      }
+    } catch (e) {
+      report(7, 'Фишинг: модальные диалоги (alert)', false, e.message);
+    }
+
+    // ─── 8/20 Сетевая атака: fetch ───
+    try {
+      if (typeof fetch === 'undefined') {
+        report(8, 'Сетевая атака: fetch', false, 'удалён');
+      } else {
+        fetch('https://httpbin.org/get')
+          .then(() => report(8, 'Сетевая атака: fetch', true, 'запрос прошёл'))
+          .catch(e => report(8, 'Сетевая атака: fetch', false, e.message));
+      }
+    } catch (e) {
+      report(8, 'Сетевая атака: fetch', false, e.message);
+    }
+
+    // ─── 9/20 Сетевая атака: XMLHttpRequest ───
+    try {
+      if (typeof XMLHttpRequest === 'undefined') {
+        report(9, 'Сетевая атака: XMLHttpRequest', false, 'удалён');
+      } else {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', 'https://httpbin.org/get');
+        xhr.onload = () => report(9, 'Сетевая атака: XMLHttpRequest', true, 'запрос прошёл');
+        xhr.onerror = () => report(9, 'Сетевая атака: XMLHttpRequest', false, 'заблокирован');
+        xhr.send();
+      }
+    } catch (e) {
+      report(9, 'Сетевая атака: XMLHttpRequest', false, e.message);
+    }
+
+    // ─── 10/20 Сетевая атака: WebSocket ───
+    try {
+      if (typeof WebSocket === 'undefined') {
+        report(10, 'Сетевая атака: WebSocket', false, 'удалён');
+      } else {
+        const ws = new WebSocket('wss://echo.websocket.org');
+        ws.onopen = () => { ws.close(); report(10, 'Сетевая атака: WebSocket', true, 'подключён'); };
+        ws.onerror = () => report(10, 'Сетевая атака: WebSocket', false, 'заблокирован');
+      }
+    } catch (e) {
+      report(10, 'Сетевая атака: WebSocket', false, e.message);
+    }
+
+    // ─── 11/20 Инъекция: внешний скрипт ───
+    try {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js';
+      s.onload = () => report(11, 'Инъекция: внешний <script>', true, 'загружен');
+      s.onerror = () => report(11, 'Инъекция: внешний <script>', false, 'заблокирован CSP');
+      document.head.appendChild(s);
+    } catch (e) {
+      report(11, 'Инъекция: внешний <script>', false, e.message);
+    }
+
+    // ─── 12/20 Инъекция: вложенный iframe ───
+    try {
+      const f = document.createElement('iframe');
+      f.style.display = 'none';
+      let reported = false;
+      let loadCount = 0;
+      f.onload = () => {
+        loadCount++;
+        if (reported) return;
+        try {
+          const doc = f.contentDocument;
+          const hasContent = doc && doc.body && doc.body.innerHTML.trim().length > 0;
+          if (hasContent) {
+            reported = true;
+            report(12, 'Инъекция: вложенный iframe', true, 'iframe загружен с контентом');
+          } else if (loadCount >= 2) {
+            reported = true;
+            report(12, 'Инъекция: вложенный iframe', false, 'iframe пустой (заблокирован)');
+          }
+        } catch (e) {
+          reported = true;
+          report(12, 'Инъекция: вложенный iframe', true, 'iframe загружен (cross-origin)');
+        }
+      };
+      f.onerror = () => {
+        if (!reported) { reported = true; report(12, 'Инъекция: вложенный iframe', false, 'заблокирован'); }
+      };
+      f.srcdoc = '<h1>injected</h1>';
+      document.body.appendChild(f);
+      setTimeout(() => {
+        if (!reported) { reported = true; report(12, 'Инъекция: вложенный iframe', false, 'не загрузился (таймаут)'); }
+      }, 5000);
+    } catch (e) {
+      report(12, 'Инъекция: вложенный iframe', false, e.message);
+    }
+
+    // ─── 13/20 Сетевая атака: sendBeacon ───
+    try {
+      if (typeof navigator.sendBeacon !== 'function') {
+        report(13, 'Сетевая атака: sendBeacon', false, 'удалён');
+      } else {
+        const isNative = Function.prototype.toString.call(navigator.sendBeacon).includes('[native code]');
+        if (!isNative) {
+          report(13, 'Сетевая атака: sendBeacon', false, 'переопределён (defense-in-depth)');
+        } else {
+          const result = navigator.sendBeacon('https://httpbin.org/post', 'data');
+          report(13, 'Сетевая атака: sendBeacon', result, result ? 'отправлен' : 'заблокирован');
+        }
+      }
+    } catch (e) {
+      report(13, 'Сетевая атака: sendBeacon', false, e.message);
+    }
+
+    // ─── 14/20 Доступ к устройствам: камера ───
+    (async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          report(14, 'Доступ к устройствам: камера', false, 'mediaDevices недоступен');
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(t => t.stop());
+        report(14, 'Доступ к устройствам: камера', true, 'камера доступна');
+      } catch (e) {
+        report(14, 'Доступ к устройствам: камера', false, e.message);
+      }
+    })();
+
+    // ─── 15/20 Доступ к устройствам: геолокация ───
+    try {
+      if (!navigator.geolocation) {
+        report(15, 'Доступ к устройствам: геолокация', false, 'geolocation недоступен');
+      } else {
+        navigator.geolocation.getCurrentPosition(
+          () => report(15, 'Доступ к устройствам: геолокация', true, 'координаты получены'),
+          (err) => report(15, 'Доступ к устройствам: геолокация', false, err.message)
+        );
+      }
+    } catch (e) {
+      report(15, 'Доступ к устройствам: геолокация', false, e.message);
+    }
+
+    // ─── 16/20 Обход защиты: восстановление fetch через прототип ───
+    try {
+      const isNative = typeof fetch === 'function' && Function.prototype.toString.call(fetch).includes('[native code]');
+      if (isNative) {
+        report(16, 'Обход защиты: fetch через прототип', true, 'fetch не был удалён — восстановление не требуется');
+      } else if (typeof fetch === 'function') {
+        const proto = Object.getPrototypeOf(window);
+        const fetchFromProto = proto?.fetch;
+        if (typeof fetchFromProto === 'function') {
+          fetchFromProto.call(window, 'https://httpbin.org/get')
+            .then(() => report(16, 'Обход защиты: fetch через прототип', true, 'запрос прошёл'))
+            .catch(e => report(16, 'Обход защиты: fetch через прототип', false, 'CSP заблокировал: ' + e.message));
+        } else {
+          report(16, 'Обход защиты: fetch через прототип', false, 'не удалось восстановить');
+        }
+      } else {
+        const proto = Object.getPrototypeOf(window);
+        const fetchFromProto = proto?.fetch;
+        if (typeof fetchFromProto === 'function') {
+          fetchFromProto.call(window, 'https://httpbin.org/get')
+            .then(() => report(16, 'Обход защиты: fetch через прототип', true, 'запрос прошёл'))
+            .catch(e => report(16, 'Обход защиты: fetch через прототип', false, 'CSP заблокировал: ' + e.message));
+        } else {
+          report(16, 'Обход защиты: fetch через прототип', false, 'не удалось восстановить');
+        }
+      }
+    } catch (e) {
+      report(16, 'Обход защиты: fetch через прототип', false, e.message);
+    }
+
+    // ─── 17/20 DoS: бесконечный цикл в Worker ───
+    try {
+      const workerCode = 'self.onmessage = function() { while(true){} };';
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const w = new Worker(URL.createObjectURL(blob));
+      const t17 = setTimeout(() => {
+        w.terminate();
+        report(17, 'DoS: бесконечный цикл в Worker', true, 'Worker создан и потреблял CPU 3 сек');
+      }, 3000);
+      w.onerror = (e) => {
+        clearTimeout(t17);
+        report(17, 'DoS: бесконечный цикл в Worker', false, 'Worker не создан: ' + (e.message || 'ошибка'));
+      };
+      w.postMessage('go');
+    } catch (e) {
+      report(17, 'DoS: бесконечный цикл в Worker', false, 'Worker недоступен: ' + e.message);
+    }
+
+    // ─── 18/20 DoS: выделение памяти в Worker ───
+    try {
+      const workerCode = `self.onmessage = function() {
+        const a = [];
+        try { while(true) { a.push(new ArrayBuffer(1024*1024*10)); } }
+        catch(e) { self.postMessage('oom: ' + e.message); }
+      };`;
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const w = new Worker(URL.createObjectURL(blob));
+      const t18 = setTimeout(() => {
+        w.terminate();
+        report(18, 'DoS: выделение памяти в Worker', true, 'Worker создан и потреблял память 3 сек');
+      }, 3000);
+      w.onmessage = (e) => {
+        clearTimeout(t18);
+        w.terminate();
+        report(18, 'DoS: выделение памяти в Worker', true, 'Worker потребил память до OOM: ' + e.data);
+      };
+      w.onerror = (e) => {
+        clearTimeout(t18);
+        report(18, 'DoS: выделение памяти в Worker', false, 'Worker недоступен: ' + (e.message || 'ошибка'));
+      };
+      w.postMessage('go');
+    } catch (e) {
+      report(18, 'DoS: выделение памяти в Worker', false, 'Worker недоступен: ' + e.message);
+    }
+
+    // ─── 19/20 Эксфильтрация: отправка формы ───
+    try {
+      const isNative = Function.prototype.toString.call(HTMLFormElement.prototype.submit).includes('[native code]');
+      if (!isNative) {
+        report(19, 'Эксфильтрация: отправка формы', false, 'переопределён (defense-in-depth)');
+      } else {
+        const target = document.createElement('iframe');
+        target.name = 'form-target-19';
+        target.style.display = 'none';
+        document.body.appendChild(target);
+
+        const form = document.createElement('form');
+        form.method = 'GET';
+        form.action = 'https://httpbin.org/get';
+        form.target = 'form-target-19';
+        document.body.appendChild(form);
+
+        let reported = false;
+        form.submit();
+
+        let checks = 0;
+        const interval = setInterval(() => {
+          checks++;
+          if (reported) { clearInterval(interval); return; }
+          try {
+            const loc = target.contentWindow.location.href;
+            if (loc && loc !== 'about:blank') {
+              reported = true;
+              clearInterval(interval);
+              report(19, 'Эксфильтрация: отправка формы', true, 'форма отправлена');
+            }
+          } catch (e) {
+            reported = true;
+            clearInterval(interval);
+            report(19, 'Эксфильтрация: отправка формы', true, 'форма отправлена (cross-origin)');
+          }
+          if (checks >= 20 && !reported) {
+            reported = true;
+            clearInterval(interval);
+            report(19, 'Эксфильтрация: отправка формы', false, 'навигация заблокирована sandbox');
+          }
+        }, 250);
+      }
+    } catch (e) {
+      report(19, 'Эксфильтрация: отправка формы', false, e.message);
+    }
+
+    // ─── 20/20 Побег из sandbox: удаление атрибута через frameElement ───
+    try {
+      const el = window.frameElement;
+      if (el) {
+        report(20, 'Побег из sandbox: frameElement', true, 'доступен — можно удалить sandbox');
+      } else {
+        report(20, 'Побег из sandbox: frameElement', false, 'null (cross-origin)');
+      }
+    } catch (e) {
+      report(20, 'Побег из sandbox: frameElement', false, e.message);
+    }
+  </script>
+</body>
+</html>

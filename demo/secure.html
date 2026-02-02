@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Secure iframe — полная изоляция</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; padding: 24px; background: #f5f5f5; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .info { color: #2e7d32; font-size: 13px; margin-bottom: 20px; }
+    .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    label.upload {
+      display: inline-block; padding: 8px 16px; background: #333; color: #fff;
+      border-radius: 6px; cursor: pointer; font-size: 14px;
+    }
+    label.upload:hover { background: #555; }
+    input[type="file"] { display: none; }
+    .filename { font-size: 13px; color: #666; }
+    button {
+      padding: 8px 20px; font-size: 14px; border: none; border-radius: 6px;
+      background: #2e7d32; color: #fff; cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button:hover:not(:disabled) { background: #1b5e20; }
+    iframe {
+      width: 100%; height: calc(100vh - 160px); border: 2px solid #2e7d32;
+      border-radius: 8px; background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Secure iframe</h1>
+  <p class="info">sandbox="allow-scripts" · CSP: default-src 'none'; script-src 'unsafe-inline' · Permissions Policy: camera/mic/geo 'none'</p>
+
+  <div class="controls">
+    <label class="upload">
+      Выбрать HTML-файл
+      <input type="file" id="file" accept=".html,.htm">
+    </label>
+    <span class="filename" id="filename">файл не выбран</span>
+    <button id="run" disabled>Загрузить в iframe</button>
+  </div>
+
+  <iframe id="frame"
+    sandbox="allow-scripts"
+    allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; bluetooth 'none'"
+  ></iframe>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const filenameLabel = document.getElementById('filename');
+    const runBtn = document.getElementById('run');
+    const frame = document.getElementById('frame');
+
+    const CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline';">`;
+
+    const DEFENSE_IN_DEPTH = `<script>
+      delete window.fetch;
+      delete window.XMLHttpRequest;
+      delete window.WebSocket;
+      delete window.EventSource;
+      try { delete window.navigator.sendBeacon; } catch(e) {}
+      try { navigator.sendBeacon = function() { return false; }; } catch(e) {}
+      try { Object.defineProperty(Navigator.prototype, 'sendBeacon', { value: function() { return false; }, writable: false, configurable: false }); } catch(e) {}
+      window.alert = function() {};
+      window.confirm = function() { return false; };
+      window.prompt = function() { return null; };
+      HTMLFormElement.prototype.submit = function() {};
+      HTMLFormElement.prototype.requestSubmit = function() {};
+    <\/script>`;
+
+    let fileContent = null;
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      filenameLabel.textContent = file.name;
+      const reader = new FileReader();
+      reader.onload = () => {
+        fileContent = reader.result;
+        runBtn.disabled = false;
+      };
+      reader.readAsText(file);
+    });
+
+    runBtn.addEventListener('click', () => {
+      if (!fileContent) return;
+      // Inject CSP and defense-in-depth before user content
+      frame.srcdoc = CSP_META + DEFENSE_IN_DEPTH + fileContent;
+    });
+  </script>
+</body>
+</html>

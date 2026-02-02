@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Программное тестирование — sandbox-security-tests</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; padding: 24px; background: #f5f5f5; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .info { color: #555; font-size: 13px; margin-bottom: 20px; }
+    code { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+    button {
+      padding: 8px 20px; font-size: 14px; border: none; border-radius: 6px;
+      background: #1565c0; color: #fff; cursor: pointer; margin-bottom: 16px;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button:hover:not(:disabled) { background: #0d47a1; }
+    .summary { font-size: 16px; margin-bottom: 12px; }
+    .pass { color: #2e7d32; }
+    .fail { color: #c62828; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border: 1px solid #ccc; padding: 6px 12px; text-align: left; font-size: 13px; }
+    th { background: #eee; }
+    pre { background: #1a1a2e; color: #0f0; padding: 16px; border-radius: 8px; margin-top: 20px; font-size: 12px; overflow-x: auto; }
+    #target-iframe {
+      width: 0; height: 0; border: none; position: absolute;
+    }
+  </style>
+</head>
+<body>
+  <h1>sandbox-security-tests — пример использования</h1>
+  <p class="info">Эта страница демонстрирует программный вызов <code>testSandbox(iframe)</code> из npm-пакета</p>
+
+  <!-- Целевой iframe — testSandbox() читает его атрибуты и создаёт свои временные iframe -->
+  <iframe id="target-iframe" style="width:0;height:0;border:none;position:absolute;"></iframe>
+
+  <button id="run">Запустить testSandbox(iframe)</button>
+  <div id="results"></div>
+  <pre id="json"></pre>
+
+  <script type="module">
+    import { testSandbox } from '../tests/dist/index.mjs';
+
+    const iframe = document.getElementById('target-iframe');
+    iframe.sandbox = 'allow-scripts';
+    iframe.allow = "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; bluetooth 'none'";
+    iframe.srcdoc = `
+      <meta http-equiv="Content-Security-Policy"
+            content="default-src 'none'; script-src 'unsafe-inline';">
+      <script>
+        delete window.fetch;
+        delete window.XMLHttpRequest;
+        delete window.WebSocket;
+        delete window.EventSource;
+        try { delete window.navigator.sendBeacon; } catch(e) {}
+        window.alert = function() {};
+        window.confirm = function() { return false; };
+        window.prompt = function() { return null; };
+        HTMLFormElement.prototype.submit = function() {};
+        try { Object.defineProperty(Navigator.prototype, 'sendBeacon', { value: function() { return false; }, writable: false, configurable: false }); } catch(e) {}
+      <\/script>
+    `;
+
+    const resultsDiv = document.getElementById('results');
+    const jsonPre = document.getElementById('json');
+    const runBtn = document.getElementById('run');
+
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = 'Выполняется…';
+      resultsDiv.innerHTML = '';
+      jsonPre.textContent = '';
+
+      const results = await testSandbox(iframe);
+
+      // Summary
+      const summary = document.createElement('div');
+      summary.className = 'summary';
+      summary.innerHTML =
+        `<span class="pass">${results.passed} пройдено</span> · ` +
+        `<span class="fail">${results.failed} провалено</span> из ${results.tests.length}`;
+      resultsDiv.appendChild(summary);
+
+      // Table
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Тест</th>
+            <th>Статус</th>
+            <th>Детали</th>
+          </tr>
+        </thead>
+      `;
+      const tbody = document.createElement('tbody');
+      results.tests.forEach(t => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.index + 1}</td>
+          <td>${t.name}</td>
+          <td class="${t.passed ? 'pass' : 'fail'}">${t.passed ? 'PASS' : 'FAIL'}</td>
+          <td>${t.detail}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      resultsDiv.appendChild(table);
+
+      // Raw JSON
+      jsonPre.textContent = '// await testSandbox(iframe)\n' + JSON.stringify(results, null, 2);
+
+      runBtn.disabled = false;
+      runBtn.textContent = 'Запустить testSandbox(iframe)';
+    });
+  </script>
+</body>
+</html>
