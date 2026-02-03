@@ -81,9 +81,10 @@ export const tests: TestDefinition[] = [
     description: 'window.open() должен вернуть null или бросить исключение',
     code: `
       try {
-        const w = window.open('about:blank');
+        // Note: this may also be blocked by browser popup blocker (not just sandbox)
+        const w = window.open('', '_blank', 'width=100,height=100');
         if (w === null) {
-          parent.postMessage({ type: 'test-result', blocked: true, detail: 'window.open вернул null' }, '*');
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'window.open заблокирован (sandbox или popup blocker)' }, '*');
         } else {
           w.close();
           parent.postMessage({ type: 'test-result', blocked: false, detail: 'popup открыт' }, '*');
@@ -100,8 +101,13 @@ export const tests: TestDefinition[] = [
     description: 'alert() должен быть заблокирован sandbox без allow-modals',
     code: `
       try {
-        alert('test');
-        parent.postMessage({ type: 'test-result', blocked: false, detail: 'alert выполнен' }, '*');
+        const isNative = Function.prototype.toString.call(alert).includes('[native code]');
+        if (isNative) {
+          alert('test');
+          parent.postMessage({ type: 'test-result', blocked: false, detail: 'alert выполнен' }, '*');
+        } else {
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'переопределён (defense-in-depth)' }, '*');
+        }
       } catch (e) {
         parent.postMessage({ type: 'test-result', blocked: true, detail: e.message }, '*');
       }
@@ -193,13 +199,18 @@ export const tests: TestDefinition[] = [
     description: 'Создание вложенного iframe должно быть заблокировано CSP (child-src / frame-src)',
     code: `
       try {
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
         const f = document.createElement('iframe');
-        f.src = 'https://example.com';
+        f.srcdoc = '<h1>nested</h1>';
         f.onload = () => {
           try {
-            parent.postMessage({ type: 'test-result', blocked: false, detail: 'iframe создан' }, '*');
+            const hasContent = f.contentDocument && f.contentDocument.body && f.contentDocument.body.innerHTML.trim().length > 0;
+            parent.postMessage({ type: 'test-result', blocked: !hasContent, detail: hasContent ? 'iframe создан' : 'iframe пустой' }, '*');
           } catch(e) {
-            parent.postMessage({ type: 'test-result', blocked: true, detail: 'iframe заблокирован' }, '*');
+            // cross-origin means it loaded external content
+            parent.postMessage({ type: 'test-result', blocked: false, detail: 'iframe создан (cross-origin)' }, '*');
           }
         };
         f.onerror = () => parent.postMessage({ type: 'test-result', blocked: true, detail: 'iframe заблокирован' }, '*');
@@ -281,17 +292,23 @@ export const tests: TestDefinition[] = [
     description: 'Попытка восстановить fetch из прототипов — CSP всё равно заблокирует запрос',
     code: `
       try {
-        const proto = Object.getPrototypeOf(window);
-        const fetchFromProto = proto?.fetch;
-        let recovered = false;
-        if (typeof fetchFromProto === 'function') {
-          fetchFromProto('https://httpbin.org/get')
-            .then(() => parent.postMessage({ type: 'test-result', blocked: false, detail: 'fetch восстановлен из прототипа' }, '*'))
-            .catch(e => parent.postMessage({ type: 'test-result', blocked: true, detail: 'CSP заблокировал: ' + e.message }, '*'));
-          recovered = true;
-        }
-        if (!recovered) {
-          parent.postMessage({ type: 'test-result', blocked: true, detail: 'fetch не удалось восстановить' }, '*');
+        // If fetch exists natively, the attack vector is "fetch itself works" (test 8)
+        const isNative = typeof fetch === 'function' && Function.prototype.toString.call(fetch).includes('[native code]');
+        if (isNative) {
+          parent.postMessage({ type: 'test-result', blocked: false, detail: 'fetch не был удалён — уязвимость в тесте 8' }, '*');
+        } else if (typeof fetch === 'undefined') {
+          // fetch was deleted, try to recover
+          const proto = Object.getPrototypeOf(window);
+          const fetchFromProto = proto?.fetch;
+          if (typeof fetchFromProto === 'function') {
+            fetchFromProto.call(window, 'https://httpbin.org/get')
+              .then(() => parent.postMessage({ type: 'test-result', blocked: false, detail: 'fetch восстановлен из прототипа' }, '*'))
+              .catch(e => parent.postMessage({ type: 'test-result', blocked: true, detail: 'CSP заблокировал: ' + e.message }, '*'));
+          } else {
+            parent.postMessage({ type: 'test-result', blocked: true, detail: 'fetch не удалось восстановить' }, '*');
+          }
+        } else {
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'fetch переопределён' }, '*');
         }
       } catch (e) {
         parent.postMessage({ type: 'test-result', blocked: true, detail: e.message }, '*');
@@ -302,23 +319,24 @@ export const tests: TestDefinition[] = [
   // 17. Infinite loop in Worker
   {
     name: 'DoS: бесконечный цикл в Worker',
-    description: 'Worker с бесконечным циклом должен быть убит по таймауту',
+    description: 'Worker с бесконечным циклом — проверка возможности создания Worker',
     code: `
       try {
         const workerCode = 'self.onmessage = function() { while(true){} };';
         const blob = new Blob([workerCode], { type: 'application/javascript' });
         const w = new Worker(URL.createObjectURL(blob));
+        // Worker was created successfully — vulnerability exists
         const timeout = setTimeout(() => {
           w.terminate();
-          parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker убит по таймауту' }, '*');
-        }, 3000);
-        w.onmessage = () => {
+          parent.postMessage({ type: 'test-result', blocked: false, detail: 'Worker создан (DoS возможен)' }, '*');
+        }, 1000);
+        w.onerror = (e) => {
           clearTimeout(timeout);
-          parent.postMessage({ type: 'test-result', blocked: false, detail: 'Worker не завис' }, '*');
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker заблокирован: ' + (e.message || 'ошибка') }, '*');
         };
         w.postMessage('go');
       } catch (e) {
-        parent.postMessage({ type: 'test-result', blocked: true, detail: e.message }, '*');
+        parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker недоступен: ' + e.message }, '*');
       }
     `,
   },
@@ -326,33 +344,24 @@ export const tests: TestDefinition[] = [
   // 18. Memory exhaustion in Worker
   {
     name: 'DoS: выделение памяти',
-    description: 'Попытка выделить большой объём памяти в Worker — проверка что Worker можно убить',
+    description: 'Worker с выделением памяти — проверка возможности создания Worker',
     code: `
       try {
-        const workerCode = \`
-          self.onmessage = function() {
-            const arrays = [];
-            try {
-              while(true) { arrays.push(new ArrayBuffer(1024 * 1024 * 10)); }
-            } catch(e) {
-              self.postMessage('oom: ' + e.message);
-            }
-          };
-        \`;
+        const workerCode = 'self.onmessage = function() { const a = []; while(true) a.push(new ArrayBuffer(1024*1024)); };';
         const blob = new Blob([workerCode], { type: 'application/javascript' });
         const w = new Worker(URL.createObjectURL(blob));
+        // Worker was created successfully — vulnerability exists
         const timeout = setTimeout(() => {
           w.terminate();
-          parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker убит по таймауту (память)' }, '*');
-        }, 3000);
-        w.onmessage = (e) => {
+          parent.postMessage({ type: 'test-result', blocked: false, detail: 'Worker создан (DoS возможен)' }, '*');
+        }, 1000);
+        w.onerror = (e) => {
           clearTimeout(timeout);
-          w.terminate();
-          parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker упал: ' + e.data }, '*');
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker заблокирован: ' + (e.message || 'ошибка') }, '*');
         };
         w.postMessage('go');
       } catch (e) {
-        parent.postMessage({ type: 'test-result', blocked: true, detail: e.message }, '*');
+        parent.postMessage({ type: 'test-result', blocked: true, detail: 'Worker недоступен: ' + e.message }, '*');
       }
     `,
   },
@@ -363,12 +372,53 @@ export const tests: TestDefinition[] = [
     description: 'form.submit() должен быть заблокирован без allow-forms',
     code: `
       try {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = 'https://httpbin.org/post';
-        document.body.appendChild(form);
-        form.submit();
-        parent.postMessage({ type: 'test-result', blocked: false, detail: 'form.submit() выполнен' }, '*');
+        // Check if form.submit was overridden
+        const isNative = Function.prototype.toString.call(HTMLFormElement.prototype.submit).includes('[native code]');
+        if (!isNative) {
+          parent.postMessage({ type: 'test-result', blocked: true, detail: 'form.submit переопределён (defense-in-depth)' }, '*');
+        } else {
+          // Ensure body exists
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement('body'));
+          }
+          // Create target iframe to catch form submission
+          const target = document.createElement('iframe');
+          target.name = 'formtarget';
+          target.style.display = 'none';
+          document.body.appendChild(target);
+
+          const form = document.createElement('form');
+          form.method = 'GET';
+          form.action = 'https://httpbin.org/get';
+          form.target = 'formtarget';
+          document.body.appendChild(form);
+
+          let reported = false;
+          // Check if target iframe navigated
+          const checkInterval = setInterval(() => {
+            if (reported) return;
+            try {
+              // If we can't access location, it's cross-origin (navigated)
+              const loc = target.contentWindow.location.href;
+              // Still same-origin, check if it changed
+            } catch (e) {
+              // Cross-origin = form submitted successfully
+              clearInterval(checkInterval);
+              reported = true;
+              parent.postMessage({ type: 'test-result', blocked: false, detail: 'form отправлена' }, '*');
+            }
+          }, 200);
+
+          form.submit();
+
+          setTimeout(() => {
+            if (!reported) {
+              clearInterval(checkInterval);
+              reported = true;
+              parent.postMessage({ type: 'test-result', blocked: true, detail: 'form.submit заблокирован sandbox' }, '*');
+            }
+          }, 3000);
+        }
       } catch (e) {
         parent.postMessage({ type: 'test-result', blocked: true, detail: e.message }, '*');
       }

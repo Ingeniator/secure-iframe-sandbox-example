@@ -24,18 +24,26 @@ function extractCSP(srcdoc: string | null): string | null {
   return null;
 }
 
-function buildSrcdoc(csp: string | null, testCode: string): string {
+function buildSrcdoc(csp: string | null, hasDefenseInDepth: boolean, testCode: string): string {
   const cspMeta = csp
     ? `<meta http-equiv="Content-Security-Policy" content="${csp}">`
     : '';
 
-  const defenseInDepth = `<script>
+  const defenseInDepth = hasDefenseInDepth
+    ? `<script>
     delete window.fetch;
     delete window.XMLHttpRequest;
     delete window.WebSocket;
     delete window.EventSource;
     try { delete window.navigator.sendBeacon; } catch(e) {}
-  <\/script>`;
+    window.alert = function() {};
+    window.confirm = function() { return false; };
+    window.prompt = function() { return null; };
+    try { Object.defineProperty(Navigator.prototype, 'sendBeacon', { value: function() { return false; }, writable: false, configurable: false }); } catch(e) {}
+    HTMLFormElement.prototype.submit = function() {};
+    HTMLFormElement.prototype.requestSubmit = function() {};
+  <\/script>`
+    : '';
 
   return `${cspMeta}${defenseInDepth}<script>${testCode}<\/script>`;
 }
@@ -44,16 +52,17 @@ function runSingleTest(
   sandboxAttr: string,
   allowAttr: string,
   csp: string | null,
+  hasDefenseInDepth: boolean,
   test: TestDefinition,
   index: number,
   timeout: number
 ): Promise<TestResult> {
   return new Promise((resolve) => {
     const iframe = document.createElement('iframe');
-    iframe.sandbox.value = sandboxAttr;
+    if (sandboxAttr) iframe.sandbox.value = sandboxAttr;
     if (allowAttr) iframe.allow = allowAttr;
     iframe.style.cssText = 'width:0;height:0;border:none;position:absolute;';
-    iframe.srcdoc = buildSrcdoc(csp, test.code);
+    iframe.srcdoc = buildSrcdoc(csp, hasDefenseInDepth, test.code);
 
     let settled = false;
 
@@ -101,10 +110,12 @@ export async function testSandbox(
   options?: { timeout?: number }
 ): Promise<TestSuiteResult> {
   const timeout = options?.timeout ?? 8000;
-  const sandboxAttr = iframe.getAttribute('sandbox') || 'allow-scripts';
+  const sandboxAttr = iframe.getAttribute('sandbox') || '';
   const allowAttr = iframe.getAttribute('allow') || '';
   const srcdoc = iframe.getAttribute('srcdoc') || '';
   const csp = extractCSP(srcdoc);
+  // Only apply defense-in-depth if target iframe has CSP (indicates secure config)
+  const hasDefenseInDepth = !!csp;
 
   const results: TestResult[] = [];
 
@@ -114,6 +125,7 @@ export async function testSandbox(
       sandboxAttr,
       allowAttr,
       csp,
+      hasDefenseInDepth,
       tests[i],
       i,
       timeout

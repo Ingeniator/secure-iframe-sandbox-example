@@ -9,12 +9,16 @@
     h1 { font-size: 20px; margin-bottom: 4px; }
     .info { color: #555; font-size: 13px; margin-bottom: 20px; }
     code { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+    .buttons { display: flex; gap: 12px; margin-bottom: 16px; }
     button {
       padding: 8px 20px; font-size: 14px; border: none; border-radius: 6px;
-      background: #1565c0; color: #fff; cursor: pointer; margin-bottom: 16px;
+      color: #fff; cursor: pointer;
     }
     button:disabled { opacity: 0.4; cursor: default; }
-    button:hover:not(:disabled) { background: #0d47a1; }
+    .btn-secure { background: #2e7d32; }
+    .btn-secure:hover:not(:disabled) { background: #1b5e20; }
+    .btn-unsecure { background: #c62828; }
+    .btn-unsecure:hover:not(:disabled) { background: #b71c1c; }
     .summary { font-size: 16px; margin-bottom: 12px; }
     .pass { color: #2e7d32; }
     .fail { color: #c62828; }
@@ -22,29 +26,45 @@
     td, th { border: 1px solid #ccc; padding: 6px 12px; text-align: left; font-size: 13px; }
     th { background: #eee; }
     pre { background: #1a1a2e; color: #0f0; padding: 16px; border-radius: 8px; margin-top: 20px; font-size: 12px; overflow-x: auto; }
-    #target-iframe {
-      width: 0; height: 0; border: none; position: absolute;
-    }
+    .hidden-iframe { width: 0; height: 0; border: none; position: absolute; }
   </style>
 </head>
 <body>
   <h1>sandbox-security-tests — пример использования</h1>
   <p class="info">Эта страница демонстрирует программный вызов <code>testSandbox(iframe)</code> из npm-пакета</p>
 
-  <!-- Целевой iframe — testSandbox() читает его атрибуты и создаёт свои временные iframe -->
-  <iframe id="target-iframe" style="width:0;height:0;border:none;position:absolute;"></iframe>
+  <details style="margin-bottom:16px;font-size:13px;color:#666;">
+    <summary style="cursor:pointer;color:#333;">⚠️ Ограничения программного тестирования</summary>
+    <div style="margin-top:8px;padding:8px;background:#fff8e1;border-radius:4px;">
+      Некоторые тесты дают <b>ложные PASS</b> на unsecure iframe из-за ограничений браузера, а не нашего sandbox:
+      <ul style="margin:8px 0 0 20px;">
+        <li><b>Cookies</b> — srcdoc всегда имеет opaque origin (cookies недоступны)</li>
+        <li><b>Popup</b> — браузер блокирует window.open без жеста пользователя</li>
+        <li><b>Геолокация/Камера</b> — требуют разрешения пользователя</li>
+      </ul>
+      Для реалистичных результатов используйте визуальное демо: <a href="unsecure.html">unsecure.html</a> + <a href="data/malicious.html">malicious.html</a>
+    </div>
+  </details>
 
-  <button id="run">Запустить testSandbox(iframe)</button>
+  <!-- Два iframe: secure и unsecure -->
+  <iframe id="secure-iframe" class="hidden-iframe"></iframe>
+  <iframe id="unsecure-iframe" class="hidden-iframe"></iframe>
+
+  <div class="buttons">
+    <button id="run-secure" class="btn-secure">Тест secure iframe</button>
+    <button id="run-unsecure" class="btn-unsecure">Тест unsecure iframe</button>
+  </div>
   <div id="results"></div>
   <pre id="json"></pre>
 
   <script type="module">
     import { testSandbox } from '../tests/dist/index.mjs';
 
-    const iframe = document.getElementById('target-iframe');
-    iframe.sandbox = 'allow-scripts';
-    iframe.allow = "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; bluetooth 'none'";
-    iframe.srcdoc = `
+    // Secure iframe — полная защита
+    const secureIframe = document.getElementById('secure-iframe');
+    secureIframe.sandbox = 'allow-scripts';
+    secureIframe.allow = "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; bluetooth 'none'";
+    secureIframe.srcdoc = `
       <meta http-equiv="Content-Security-Policy"
             content="default-src 'none'; script-src 'unsafe-inline';">
       <script>
@@ -61,19 +81,31 @@
       <\/script>
     `;
 
+    // Unsecure iframe — без защиты
+    const unsecureIframe = document.getElementById('unsecure-iframe');
+    // Без sandbox, без CSP, без allow — полностью открытый iframe
+    unsecureIframe.srcdoc = '<html><body></body></html>';
+
     const resultsDiv = document.getElementById('results');
     const jsonPre = document.getElementById('json');
-    const runBtn = document.getElementById('run');
+    const runSecureBtn = document.getElementById('run-secure');
+    const runUnsecureBtn = document.getElementById('run-unsecure');
 
-    runBtn.addEventListener('click', async () => {
-      runBtn.disabled = true;
-      runBtn.textContent = 'Выполняется…';
-      resultsDiv.innerHTML = '';
+    async function runTests(iframe, label) {
+      runSecureBtn.disabled = true;
+      runUnsecureBtn.disabled = true;
+      resultsDiv.innerHTML = `<div style="color:#888">Выполняется тест ${label}…</div>`;
       jsonPre.textContent = '';
 
       const results = await testSandbox(iframe);
 
       // Summary
+      resultsDiv.innerHTML = '';
+      const header = document.createElement('div');
+      header.style.cssText = 'font-weight:bold; margin-bottom:8px;';
+      header.textContent = label;
+      resultsDiv.appendChild(header);
+
       const summary = document.createElement('div');
       summary.className = 'summary';
       summary.innerHTML =
@@ -108,11 +140,14 @@
       resultsDiv.appendChild(table);
 
       // Raw JSON
-      jsonPre.textContent = '// await testSandbox(iframe)\n' + JSON.stringify(results, null, 2);
+      jsonPre.textContent = `// await testSandbox(${label === 'Secure iframe' ? 'secureIframe' : 'unsecureIframe'})\n` + JSON.stringify(results, null, 2);
 
-      runBtn.disabled = false;
-      runBtn.textContent = 'Запустить testSandbox(iframe)';
-    });
+      runSecureBtn.disabled = false;
+      runUnsecureBtn.disabled = false;
+    }
+
+    runSecureBtn.addEventListener('click', () => runTests(secureIframe, 'Secure iframe'));
+    runUnsecureBtn.addEventListener('click', () => runTests(unsecureIframe, 'Unsecure iframe'));
   </script>
 </body>
 </html>
